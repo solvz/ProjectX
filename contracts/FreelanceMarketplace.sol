@@ -2,114 +2,198 @@
 pragma solidity ^0.8.0;
 
 contract FreelanceMarketplace {
+    enum JobStatus { Created, Funded, Completed, Disputed, Resolved }
+    enum DisputeResolution { None, ClientWins, FreelancerWins }
+
     struct Job {
-        uint256 id;
-        address employer;
-        address freelancer;
-        string title;
-        string description;
-        uint256 budget;
-        uint256 createdAt;
-        bool isActive;
-        bool isCompleted;
-        bool isDisputed;
+        address payable client;
+        address payable freelancer;
+        uint256 amount;
+        JobStatus status;
+        DisputeResolution disputeResolution;
+    }
+
+    struct Dispute {
+        uint256 jobId;
+        uint256 clientVotes;
+        uint256 freelancerVotes;
+        mapping(address => bool) hasVoted;
     }
 
     mapping(uint256 => Job) public jobs;
-    mapping(uint256 => uint256) public jobBalances; // Escrow balances
-    uint256 public jobCount;
+    mapping(uint256 => Dispute) public disputes;
+    uint256 public jobCounter;
 
+    address public owner;
+    uint256 public platformFeePercentage;
+    address[] public arbitrators;
+    uint256 public constant REQUIRED_VOTES = 3;
 
-    //Events:
-    event JobPosted(uint256 id, address employer, string title, uint256 budget);
-    event JobAccepted(uint256 jobId, address freelancer);
+    event JobCreated(uint256 jobId, address client, address freelancer, uint256 amount);
+    event JobFunded(uint256 jobId);
     event JobCompleted(uint256 jobId);
-    event PaymentReleased(uint256 jobId, address freelancer, uint256 amount);
-    event JobCancelled(uint256 id);
     event DisputeRaised(uint256 jobId);
+    event DisputeResolved(uint256 jobId, DisputeResolution resolution);
+    event ArbitratorAdded(address arbitrator);
+    event ArbitratorRemoved(address arbitrator);
 
-    //Modifiers:
-    modifier onlyEmployer(uint256 jobId) {
-        require(msg.sender == jobs[jobId].employer, "Only employer can perform this action");
+    constructor(uint256 _platformFeePercentage) {
+        owner = msg.sender;
+        platformFeePercentage = _platformFeePercentage;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the owner can call this function");
         _;
     }
 
-    modifier onlyFreelancer(uint256 jobId) {
-        require(msg.sender == jobs[jobId].freelancer, "Only freelancer can perform this action");
+    modifier onlyClient(uint256 _jobId) {
+        require(msg.sender == jobs[_jobId].client, "Only the client can call this function");
         _;
     }
 
-    modifier jobExists(uint256 jobId) {
-        require(jobId > 0 && jobId <= jobCount, "Job does not exist");
+    modifier onlyFreelancer(uint256 _jobId) {
+        require(msg.sender == jobs[_jobId].freelancer, "Only the freelancer can call this function");
         _;
     }
 
-    // Function to post a new job
-    function postJob(string memory _title, string memory _description, uint256 _budget) public {
-        require(_budget > 0, "Budget must be greater than zero");
-
-        jobCount++;
-        jobs[jobCount] = Job(jobCount, msg.sender, address(0), _title, _description, _budget, block.timestamp, true, false, false);
-        
-        emit JobPosted(jobCount, msg.sender, _title, _budget);
+    modifier onlyArbitrator() {
+        bool isArbitrator = false;
+        for (uint i = 0; i < arbitrators.length; i++) {
+            if (arbitrators[i] == msg.sender) {
+                isArbitrator = true;
+                break;
+            }
+        }
+        require(isArbitrator, "Only arbitrators can call this function");
+        _;
     }
 
-    // Function to accept a job (freelancer)
-    function acceptJob(uint256 jobId) public jobExists(jobId) {
-        require(jobs[jobId].isActive, "Job is not active");
-        require(jobs[jobId].freelancer == address(0), "Job has already been accepted");
+    function createJob(address payable _freelancer) external payable returns (uint256) {
+        require(msg.value > 0, "Job amount must be greater than 0");
 
-        jobs[jobId].freelancer = msg.sender;
-        emit JobAccepted(jobId, msg.sender);
+        uint256 jobId = jobCounter++;
+        jobs[jobId] = Job({
+            client: payable(msg.sender),
+            freelancer: _freelancer,
+            amount: msg.value,
+            status: JobStatus.Created,
+            disputeResolution: DisputeResolution.None
+        });
+
+        emit JobCreated(jobId, msg.sender, _freelancer, msg.value);
+        return jobId;
     }
 
-    // Function to fund the escrow
-    function fundEscrow(uint256 jobId) public payable onlyEmployer(jobId) jobExists(jobId) {
-        require(msg.value == jobs[jobId].budget, "Must send the exact budget amount");
-        jobBalances[jobId] += msg.value;
+    function fundJob(uint256 _jobId) external payable onlyClient(_jobId) {
+        Job storage job = jobs[_jobId];
+        require(job.status == JobStatus.Created, "Job must be in Created status");
+        require(msg.value == job.amount, "Funding amount must match job amount");
+
+        job.status = JobStatus.Funded;
+        emit JobFunded(_jobId);
     }
 
-    // Function to mark job as completed
-    function completeJob(uint256 jobId) public onlyFreelancer(jobId) jobExists(jobId) {
-        require(jobs[jobId].isActive, "Job is not active");
-        require(!jobs[jobId].isCompleted, "Job already completed");
+    function completeJob(uint256 _jobId) external onlyClient(_jobId) {
+        Job storage job = jobs[_jobId];
+        require(job.status == JobStatus.Funded, "Job must be in Funded status");
 
-        jobs[jobId].isCompleted = true;
-        emit JobCompleted(jobId);
+        uint256 platformFee = (job.amount * platformFeePercentage) / 100;
+        uint256 freelancerPayment = job.amount - platformFee;
+
+        job.status = JobStatus.Completed;
+        job.freelancer.transfer(freelancerPayment);
+        payable(owner).transfer(platformFee);
+
+        emit JobCompleted(_jobId);
     }
 
-    // Function to release payment to freelancer
-    function releasePayment(uint256 jobId) public onlyEmployer(jobId) jobExists(jobId) {
-        require(jobs[jobId].isCompleted, "Job is not completed");
-        require(jobBalances[jobId] > 0, "No funds in escrow");
+    function raiseDispute(uint256 _jobId) external {
+        Job storage job = jobs[_jobId];
+        require(msg.sender == job.client || msg.sender == job.freelancer, "Only client or freelancer can raise a dispute");
+        require(job.status == JobStatus.Funded, "Job must be in Funded status");
 
-        uint256 amount = jobBalances[jobId];
-        jobBalances[jobId] = 0;
-        payable(jobs[jobId].freelancer).transfer(amount);
-
-        emit PaymentReleased(jobId, jobs[jobId].freelancer, amount);
+        job.status = JobStatus.Disputed;
+        disputes[_jobId].jobId = _jobId;
+        emit DisputeRaised(_jobId);
     }
 
-    // Function to cancel a job
-    function cancelJob(uint256 jobId) public onlyEmployer(jobId) jobExists(jobId) {
-        require(jobs[jobId].isActive, "Job is not active");
+    function voteOnDispute(uint256 _jobId, bool _voteForClient) external onlyArbitrator {
+        Job storage job = jobs[_jobId];
+        Dispute storage dispute = disputes[_jobId];
 
-        jobs[jobId].isActive = false;
-        emit JobCancelled(jobId);
+        require(job.status == JobStatus.Disputed, "Job must be in Disputed status");
+        require(!dispute.hasVoted[msg.sender], "Arbitrator has already voted");
+
+        dispute.hasVoted[msg.sender] = true;
+
+        if (_voteForClient) {
+            dispute.clientVotes++;
+        } else {
+            dispute.freelancerVotes++;
+        }
+
+        if (dispute.clientVotes + dispute.freelancerVotes >= REQUIRED_VOTES) {
+            resolveDispute(_jobId);
+        }
     }
 
-    // Function to raise a dispute
-    function raiseDispute(uint256 jobId) public onlyFreelancer(jobId) jobExists(jobId) {
-        require(jobs[jobId].isActive, "Job is not active");
-        require(!jobs[jobId].isDisputed, "Dispute already raised");
+    function resolveDispute(uint256 _jobId) private {
+        Job storage job = jobs[_jobId];
+        Dispute storage dispute = disputes[_jobId];
 
-        jobs[jobId].isDisputed = true;
-        emit DisputeRaised(jobId);
+        job.status = JobStatus.Resolved;
+
+        uint256 platformFee = (job.amount * platformFeePercentage) / 100;
+        uint256 remainingAmount = job.amount - platformFee;
+
+        if (dispute.clientVotes > dispute.freelancerVotes) {
+            job.disputeResolution = DisputeResolution.ClientWins;
+            job.client.transfer(remainingAmount);
+        } else if (dispute.freelancerVotes > dispute.clientVotes) {
+            job.disputeResolution = DisputeResolution.FreelancerWins;
+            job.freelancer.transfer(remainingAmount);
+        } else {
+            // In case of a tie, split the remaining amount
+            uint256 halfAmount = remainingAmount / 2;
+            job.client.transfer(halfAmount);
+            job.freelancer.transfer(halfAmount);
+        }
+
+        payable(owner).transfer(platformFee);
+
+        emit DisputeResolved(_jobId, job.disputeResolution);
     }
 
-    // Function to get job details
-    function getJob(uint256 jobId) public view returns (Job memory) {
-        require(jobId > 0 && jobId <= jobCount, "Job does not exist");
-        return jobs[jobId];
+    function addArbitrator(address _arbitrator) external onlyOwner {
+        for (uint i = 0; i < arbitrators.length; i++) {
+            require(arbitrators[i] != _arbitrator, "Arbitrator already exists");
+        }
+        arbitrators.push(_arbitrator);
+        emit ArbitratorAdded(_arbitrator);
+    }
+
+    function removeArbitrator(address _arbitrator) external onlyOwner {
+        for (uint i = 0; i < arbitrators.length; i++) {
+            if (arbitrators[i] == _arbitrator) {
+                arbitrators[i] = arbitrators[arbitrators.length - 1];
+                arbitrators.pop();
+                emit ArbitratorRemoved(_arbitrator);
+                return;
+            }
+        }
+        revert("Arbitrator not found");
+    }
+
+    function getJobDetails(uint256 _jobId) external view returns (Job memory) {
+        return jobs[_jobId];
+    }
+
+    function getArbitrators() external view returns (address[] memory) {
+        return arbitrators;
+    }
+
+    function updatePlatformFee(uint256 _newFeePercentage) external onlyOwner {
+        platformFeePercentage = _newFeePercentage;
     }
 }
