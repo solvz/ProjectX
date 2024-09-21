@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-contract EscrowPayment {
+contract FreelanceMarketplace {
     struct Job {
         uint256 id;
         address employer;
