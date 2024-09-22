@@ -5,6 +5,14 @@ import { JobMarketplaceABI } from "./JobMarketplaceABI.js";
 const contractABI = JobMarketplaceABI;
 const contractAddress = "0x5fbdb2315678afecb367f032d93f642f64180aa3";
 
+const jobStatusMapping = {
+  0: 'Open',
+  1: 'InProgress',
+  2: 'Completed',
+  3: 'Cancelled',
+  4: 'Disputed'
+};
+
 const App = () => {
   const [contract, setContract] = useState(null);
   const [account, setAccount] = useState('');
@@ -12,6 +20,7 @@ const App = () => {
   const [newJob, setNewJob] = useState({ title: '', description: '', payment: '' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [loadingJobId, setLoadingJobId] = useState(null);
 
   useEffect(() => {
     const init = async () => {
@@ -105,9 +114,9 @@ const App = () => {
 
     try {
       setLoading(true);
-      const tx = await contract.takeJob(jobId);
+      const tx = await contract.takeJob(jobId, { gasLimit: 3000000 });
       await tx.wait();
-      console.log("Job taken successfully!");
+      console.log("Job Taken successfully!");
       
       await refreshJobs(contract);
       setLoading(false);
@@ -116,7 +125,7 @@ const App = () => {
       setError("Failed to take job. Please try again.");
       setLoading(false);
     }
-  };
+  };  
 
   const deleteJob = async (jobId) => {
     if (!contract) return;
@@ -132,6 +141,24 @@ const App = () => {
     } catch (error) {
       console.error("Error Deleting job:", error);
       setError("Failed to delete job. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const fundJob = async (jobId, amount) => {
+    if (!contract) return;
+
+    try {
+      setLoading(true);
+      const tx = await contract.fundJob(jobId, { value: ethers.parseEther(amount) });
+      await tx.wait();
+      console.log("Job Funded successfully!");
+      
+      await refreshJobs(contract);
+      setLoading(false);
+    } catch (error) {
+      console.error("Error Funding job:", error);
+      setError("Failed to fund job. Please try again.");
       setLoading(false);
     }
   };
@@ -197,8 +224,8 @@ const App = () => {
             <h3 style={{ margin: '0 0 10px 0' }}>{job.title}</h3>
             <p style={{ marginBottom: '5px' }}>{job.description}</p>
             <p style={{ marginBottom: '5px' }}>Payment: {ethers.formatEther(job.payment)} ETH</p>
-            <p style={{ marginBottom: '10px' }}>Status: {['Open', 'InProgress', 'Completed', 'Cancelled', 'Disputed'][job.status]}</p>
-            {job.status === 0 && job.employer !== account && (
+            <p style={{ marginBottom: '10px' }}>Status: {jobStatusMapping[job.status]}</p>
+            {/*{job.status === 0 && (*/}
               <button 
                 onClick={() => handleTakeJob(job.id)}
                 style={{ 
@@ -212,8 +239,9 @@ const App = () => {
               >
                 {loading ? 'Taking...' : 'Take Job'}
               </button>
-            )}
-            {job.status === 0 && job.employer === account && (
+            {/* )} */}
+            {job.employer === account && (
+              <>
               <button 
                 onClick={() => deleteJob(job.id)}
                 style={{ 
@@ -227,6 +255,21 @@ const App = () => {
               >
                 {loading ? 'Deleting...' : 'Delete Job'}
               </button>
+              <button 
+                onClick={() => fundJob(job.id, '1.0')} // Example amount to fund
+                style={{ 
+                  padding: '5px 10px', 
+                  backgroundColor: '#4CAF50', 
+                  color: 'white', 
+                  border: 'none', 
+                  cursor: 'pointer',
+                  marginLeft: '10px'
+                }}
+                disabled={loading}
+              >
+                {loading ? 'Funding...' : 'Fund Job'}
+              </button>
+            </>
             )}
           </div>
         ))}
