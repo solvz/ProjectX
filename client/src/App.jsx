@@ -118,6 +118,24 @@ const App = () => {
     }
   };
 
+  const deleteJob = async (jobId) => {
+    if (!contract) return;
+
+    try {
+      setLoading(true);
+      const tx = await contract.cancelJob(jobId);
+      await tx.wait();
+      console.log("Job Deleted successfully!");
+      
+      await refreshJobs(contract);
+      setLoading(false);
+    } catch (error) {
+      console.error("Error Deleting job:", error);
+      setError("Failed to delete job. Please try again.");
+      setLoading(false);
+    }
+  };
+
   if (loading) {
     return <div>Loading...</div>;
   }
@@ -180,7 +198,7 @@ const App = () => {
             <p style={{ marginBottom: '5px' }}>{job.description}</p>
             <p style={{ marginBottom: '5px' }}>Payment: {ethers.formatEther(job.payment)} ETH</p>
             <p style={{ marginBottom: '10px' }}>Status: {['Open', 'InProgress', 'Completed', 'Cancelled', 'Disputed'][job.status]}</p>
-            {job.status === 0 && job.employer !== account (
+            {job.status === 0 && job.employer !== account && (
               <button 
                 onClick={() => handleTakeJob(job.id)}
                 style={{ 
@@ -189,10 +207,25 @@ const App = () => {
                   color: 'white', 
                   border: 'none', 
                   cursor: 'pointer',
-                  disabled: loading
                 }}
+                disabled = {loading}
               >
                 {loading ? 'Taking...' : 'Take Job'}
+              </button>
+            )}
+            {job.status === 0 && job.employer === account && (
+              <button 
+                onClick={() => deleteJob(job.id)}
+                style={{ 
+                  padding: '5px 10px', 
+                  backgroundColor: '#f44336', 
+                  color: 'white', 
+                  border: 'none', 
+                  cursor: 'pointer'
+                }}
+                disabled={loading}
+              >
+                {loading ? 'Deleting...' : 'Delete Job'}
               </button>
             )}
           </div>
