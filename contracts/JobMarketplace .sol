@@ -12,7 +12,7 @@ contract JobMarketplace {
         JobStatus status;
         uint256 createdAt;
         uint256 completedAt;
-    }
+    }   
 
     enum JobStatus { Open, InProgress, Completed, Cancelled, Disputed }
 
@@ -54,7 +54,7 @@ contract JobMarketplace {
             jobCounter,
             payable(msg.sender),
             payable(address(0)),
-            _title,
+            _title, 
             _description,
             msg.value,
             JobStatus.Open,
