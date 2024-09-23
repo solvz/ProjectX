@@ -1,13 +1,10 @@
-# Sample Hardhat Project
+# Project X
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a Hardhat Ignition module that deploys that contract.
+This project aims on building a freelancing marketplace on the blockchain. Built as part of a hackathon.
 
-Try running some of the following tasks:
+Tech Stack:
 
-```shell
-npx hardhat help
-npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat ignition deploy ./ignition/modules/Lock.js
-```
+Solidity
+Ether.js
+Hardaht
+React
